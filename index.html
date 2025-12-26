@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>基于SGP4的卫星轨迹预测分析系统</title>
+
+    <link href="./Cesium/Widgets/widgets.css" rel="stylesheet">
+
+    <script src="./Cesium/Cesium.js"></script>
+    <script>
+        window.CESIUM_BASE_URL = './Cesium/';
+    </script>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css">
+    <script src="https://unpkg.com/element-plus"></script>
+
+    <style>
+        body, html, #cesiumContainer { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background-color: #000; }
+        #ui-panel {
+            position: absolute; top: 20px; left: 20px; z-index: 100;
+            background: rgba(30, 30, 30, 0.85); padding: 20px; border-radius: 12px;
+            color: white; width: 320px; font-family: sans-serif;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); border: 1px solid #444;
+        }
+        .info-card { margin-top: 15px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 4px; }
+        .info-label { color: #888; font-size: 12px; }
+        .info-value { color: #409EFF; font-weight: bold; font-size: 14px; margin-bottom: 8px; }
+        h3 { margin-top: 0; border-bottom: 1px solid #555; padding-bottom: 10px; font-weight: 400; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div id="ui-panel">
+            <h3>卫星轨迹预测系统</h3>
+
+            <div class="info-label" style="margin-bottom: 5px;">选择观测卫星</div>
+            <el-select
+                v-model="selectedSatId"
+                filterable
+                :loading="loading"
+                placeholder="搜索卫星名称或编号"
+                @change="handleSatChange"
+                style="width: 100%"
+            >
+                <el-option
+                    v-for="item in satelliteList"
+                    :key="item.id"
+                    :label="`${item.name} [#${item.id}]`"
+                    :value="item.id"
+                ></el-option>
+            </el-select>
+
+            <div v-if="currentInfo" class="info-card">
+                <div class="info-label">星下点位置 (Subpoint)</div>
+                <div class="info-value">经度: {{ currentInfo.subpoint.longitude.toFixed(4) }}°</div>
+                <div class="info-value">纬度: {{ currentInfo.subpoint.latitude.toFixed(4) }}°</div>
+
+                <div class="info-label">覆盖分析 (Coverage)</div>
+                <div class="info-value">覆盖半径: {{ currentInfo.cover_radius_deg.toFixed(2) }}°</div>
+                <div class="info-value">覆盖面积: {{ (currentInfo.cover_area_sqkm / 10000).toFixed(2) }} 万km²</div>
+            </div>
+
+            <el-button type="primary" plain @click="updateTleData" style="margin-top: 15px; width: 100%">
+                同步最新 TLE 数据
+            </el-button>
+        </div>
+        <div id="cesiumContainer"></div>
+    </div>
+
+    <script>
+        const { createApp, ref, onMounted } = Vue;
+
+        createApp({
+            setup() {
+                const satelliteList = ref([]);
+                const selectedSatId = ref('');
+                const currentInfo = ref(null);
+                const loading = ref(false);
+
+                let viewer = null;
+                let pathEntity = null;
+                let coverageEntity = null;
+                let satellitePoint = null;
+
+                const initCesium = () => {
+                    // 请确保 Token 有效
+                    Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiIzOGEzZTBmYS0zMDUyLTRlNjctOTRkZC1hOTk1Yzc1ZDRkOTYiLCJpZCI6MzcyOTAxLCJpYXQiOjE3NjY3MzcwMjd9.VI8dtdc2oDTipbrkU4p95xh6yF8IY4JVF_Uv286Sbk8';
+
+                    viewer = new Cesium.Viewer('cesiumContainer', {
+                        animation: true,
+                        timeline: true,
+                        baseLayerPicker: false,
+                        geocoder: false,
+                        navigationHelpButton: false,
+                        sceneModePicker: true,
+                        // 强制使用高德/OSM底图提升加载速度
+                        baseLayer: new Cesium.ImageryLayer(new Cesium.OpenStreetMapImageryProvider({
+                            url : 'https://a.tile.openstreetmap.org/'
+                        }))
+                    });
+
+                    // 渲染优化配置
+                    viewer.resolutionScale = 0.9;
+                    viewer.scene.requestRenderMode = true;
+                    viewer.scene.maximumRenderTimeChange = 0.0;
+                    viewer.scene.globe.enableLighting = true;
+                };
+
+                const fetchList = async () => {
+                    loading.value = true;
+                    try {
+                        const response = await fetch('http://localhost:8000/api/satellites/list');
+                        if (!response.ok) throw new Error('网络请求失败');
+                        satelliteList.value = await response.json();
+                    } catch (err) {
+                        ElementPlus.ElMessage.error('无法加载卫星列表，请确保后端已启动且CORS已开启');
+                    } finally {
+                        loading.value = false;
+                    }
+                };
+
+                const handleSatChange = async (id) => {
+                    loading.value = true;
+                    try {
+                        // 1. 获取轨迹数据
+                        const trajRes = await fetch(`http://localhost:8000/api/satellite/trajectory/${id}?minutes=100&step=60`);
+                        const trajData = await trajRes.json();
+                        drawTrajectory(trajData);
+
+                        // 2. 获取当前覆盖数据
+                        const covRes = await fetch(`http://localhost:8000/api/satellite/coverage/${id}`);
+                        currentInfo.value = await covRes.json();
+                        drawCoverage(currentInfo.value);
+
+                        // 修复核心：在请求渲染模式下，必须手动通知场景刷新
+                        viewer.scene.requestRender();
+                        ElementPlus.ElMessage.success(`成功切换至卫星 #${id}`);
+                    } catch (err) {
+                        console.error(err);
+                        ElementPlus.ElMessage.error('获取卫星详情失败');
+                    } finally {
+                        loading.value = false;
+                    }
+                };
+
+                const drawTrajectory = (data) => {
+                    if (pathEntity) viewer.entities.remove(pathEntity);
+                    const positions = data.map(p => Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude, p.altitude * 1000));
+
+                    pathEntity = viewer.entities.add({
+                        polyline: {
+                            positions: positions,
+                            width: 3,
+                            material: new Cesium.PolylineGlowMaterialProperty({
+                                glowPower: 0.2,
+                                color: Cesium.Color.GOLD
+                            })
+                        }
+                    });
+                    viewer.flyTo(pathEntity);
+                };
+
+                const drawCoverage = (data) => {
+                    if (coverageEntity) viewer.entities.remove(coverageEntity);
+                    if (satellitePoint) viewer.entities.remove(satellitePoint);
+
+                    const sub = data.subpoint;
+                    const footprint = data.cover_range;
+
+                    coverageEntity = viewer.entities.add({
+                        polygon: {
+                            hierarchy: footprint.map(p => Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude)),
+                            material: Cesium.Color.CYAN.withAlpha(0.2),
+                            outline: true,
+                            outlineColor: Cesium.Color.CYAN
+                        }
+                    });
+
+                    satellitePoint = viewer.entities.add({
+                        position: Cesium.Cartesian3.fromDegrees(sub.longitude, sub.latitude, 400000),
+                        point: { pixelSize: 10, color: Cesium.Color.RED }
+                    });
+                };
+
+                const updateTleData = async () => {
+                    try {
+                        await fetch('http://localhost:8000/api/data/update', { method: 'POST' });
+                        ElementPlus.ElNotification({ title: '通知', message: '后台同步中...', type: 'success' });
+                    } catch (err) {
+                        ElementPlus.ElMessage.error('请求失败');
+                    }
+                };
+
+                onMounted(() => {
+                    initCesium();
+                    fetchList();
+                });
+
+                return { satelliteList, selectedSatId, handleSatChange, currentInfo, updateTleData, loading };
+            }
+        }).use(ElementPlus).mount('#app');
+    </script>
+</body>
+</html>

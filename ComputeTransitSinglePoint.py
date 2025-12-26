@@ -126,8 +126,8 @@ def test_iss_transit() -> None:
     用一条 ISS TLE 计算未来 24 h 内上海站高于 5° 的所有过境段，
     结果以易读表格形式打印。
     """
-    from datetime import datetime, timedelta
-    from ComputeTransitSinglePoint import ComputeTransitSinglePoint
+    # from datetime import datetime, timedelta
+    # from ComputeTransitSinglePoint import ComputeTransitSinglePoint
 
     # 1. 测试数据 -----------------------------------------------------------
     # 可在 https://celestrak.org/NORAD/elements/stations.txt 获取最新 ISS TLE
