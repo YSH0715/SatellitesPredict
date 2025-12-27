@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>卫星轨迹预测与可视性分析系统</title>
+    <title>卫星综合分析可视化系统</title>
     <link href="./Cesium/Widgets/widgets.css" rel="stylesheet">
     <script src="./Cesium/Cesium.js"></script>
     <script>window.CESIUM_BASE_URL = './Cesium/';</script>
@@ -13,53 +13,87 @@
         body, html, #cesiumContainer { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background: #000; }
         #ui-panel {
             position: absolute; top: 20px; left: 20px; z-index: 100;
-            background: rgba(30, 30, 30, 0.9); padding: 15px; border-radius: 8px;
-            color: white; width: 380px; box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            background: rgba(30, 30, 30, 0.92); padding: 15px; border-radius: 8px;
+            color: white; width: 420px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); font-family: sans-serif;
         }
-        .transit-table { margin-top: 10px; background: transparent !important; }
-        .el-table { --el-table-bg-color: transparent; --el-table-tr-bg-color: transparent; color: #eee; }
-        h4 { margin: 10px 0 5px 0; color: #409EFF; }
+        .control-section { margin-bottom: 12px; border-bottom: 1px solid #444; padding-bottom: 10px; }
+        .info-card { background: rgba(255,255,255,0.05); padding: 12px; border-radius: 4px; margin-top: 10px; font-size: 13px; border-left: 4px solid #409EFF; }
+        h3 { margin: 0 0 10px 0; color: #fff; font-weight: 500; text-align: center; border-bottom: 2px solid #409EFF; padding-bottom: 5px;}
+        .el-tabs--border-card { background: transparent; border: none; margin-top: 5px; }
+        .el-table { --el-table-bg-color: transparent; --el-table-tr-bg-color: transparent; color: #ddd; }
+        .stat-val { color: #409EFF; font-weight: bold; }
+        .empty-tip { color: #888; text-align: center; padding: 20px; font-size: 13px; }
     </style>
 </head>
 <body>
     <div id="app">
         <div id="ui-panel">
-            <h3>卫星分析系统</h3>
+            <h3>卫星综合分析系统</h3>
 
-            <el-tabs type="border-card" style="background: transparent; border: none;">
-                <el-tab-pane label="追踪与覆盖">
-                    <div class="info-label">选择卫星</div>
-                    <el-select v-model="selectedSatId" filterable @change="handleSatChange" style="width: 100%">
-                        <el-option v-for="item in satelliteList" :key="item.id" :label="item.name" :value="item.id"></el-option>
-                    </el-select>
+            <div class="control-section">
+                <div style="font-size: 13px; margin-bottom: 8px; color: #ccc;">卫星库 (支持搜索与多选)</div>
+                <el-select v-model="selectedIds" multiple filterable placeholder="点击选择卫星" style="width: 100%" @change="handleSelectionChange">
+                    <el-option v-for="item in satelliteList" :key="item.id" :label="item.name" :value="item.id"></el-option>
+                </el-select>
+            </div>
 
-                    <div v-if="currentInfo" class="info-card" style="margin-top:10px; font-size:13px;">
-                        <p>经度: {{ currentInfo.subpoint.longitude.toFixed(2) }}° | 纬度: {{ currentInfo.subpoint.latitude.toFixed(2) }}°</p>
-                        <p>覆盖面积: {{ (currentInfo.cover_area_sqkm/10000).toFixed(2) }} 万km²</p>
+            <el-tabs type="border-card">
+                <el-tab-pane label="实况监控">
+                    <div v-if="displayData.length === 0" class="empty-tip">未选择卫星，请在上方搜索并勾选</div>
+                    <div v-else v-for="(sat, index) in displayData" :key="sat.sat_id" class="info-card" :style="{borderColor: colors[index % colors.length]}">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:8px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom:4px;">
+                            <b :style="{color: colors[index % colors.length]}">{{ sat.sat_name || '未知卫星' }}</b>
+                            <span class="stat-val">高度: {{ (sat.subpoint?.altitude || 0).toFixed(1) }} km</span>
+                        </div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                            <div>经度: <span class="stat-val">{{ (sat.subpoint?.longitude || 0).toFixed(3) }}°</span></div>
+                            <div>纬度: <span class="stat-val">{{ (sat.subpoint?.latitude || 0).toFixed(3) }}°</span></div>
+                            <div>覆盖半径: <span class="stat-val">{{ (sat.cover_radius_deg || 0).toFixed(1) }}°</span></div>
+                            <div>覆盖面积: <span class="stat-val">{{ ((sat.cover_area_sqkm || 0)/10000).toFixed(2) }}万km²</span></div>
+                        </div>
                     </div>
                 </el-tab-pane>
 
-                <el-tab-pane label="可视性预报">
-                    <p style="font-size: 12px; color: #aaa;">提示：左键点击地球选择地面站位置</p>
-                    <div style="margin-bottom: 10px;">
-                        <el-tag type="success">站经度: {{ station.lon.toFixed(2) }}</el-tag>
-                        <el-tag type="success" style="margin-left:5px;">站纬度: {{ station.lat.toFixed(2) }}</el-tag>
-                    </div>
-                    <el-button type="primary" size="small" @click="fetchTransit" :disabled="!selectedSatId" style="width:100%">
-                        分析未来24小时过境
-                    </el-button>
+                <el-tab-pane label="可视预报">
+                    <div v-if="selectedIds.length === 0" class="empty-tip">请先选择卫星以启用预报</div>
+                    <div v-else>
+                        <div style="font-size:11px; color:#aaa; margin-bottom:8px">1.地图点击设置地面站 2.选星 3.计算</div>
+                        <div style="margin-bottom: 10px; display:flex; gap:5px">
+                            <el-tag size="small" type="success">站经: {{ station.lon.toFixed(2) }}</el-tag>
+                            <el-tag size="small" type="success">站纬: {{ station.lat.toFixed(2) }}</el-tag>
+                        </div>
+                        <el-select v-model="transitTargetId" placeholder="选择目标卫星" size="small" style="width:100%; margin-bottom: 10px;">
+                            <el-option v-for="id in selectedIds" :key="id" :label="getSatName(id)" :value="id"></el-option>
+                        </el-select>
+                        <el-button type="primary" size="small" style="width:100%" @click="fetchTransit" :disabled="!transitTargetId">生成24H预报</el-button>
 
-                    <el-table :data="transitList" size="small" class="transit-table" max-height="250">
-                        <el-table-column prop="start_time" label="开始时间" width="140"></el-table-column>
-                        <el-table-column prop="max_pitch_angle" label="最大仰角" width="80">
-                            <template #default="scope">{{ scope.row.max_pitch_angle.toFixed(1) }}°</template>
-                        </el-table-column>
-                        <el-table-column label="持续(秒)">
-                            <template #default="scope">{{ scope.row.target_timeliness }}</template>
-                        </el-table-column>
-                    </el-table>
+                        <el-table v-if="transitList.length > 0" :data="transitList" size="small" max-height="180" style="margin-top:10px">
+                            <el-table-column prop="start_time" label="开始时间" width="130"></el-table-column>
+                            <el-table-column label="仰角" width="60">
+                                <template #default="s">{{ s.row.max_pitch_angle.toFixed(1) }}°</template>
+                            </el-table-column>
+                            <el-table-column prop="target_timeliness" label="持续(s)"></el-table-column>
+                        </el-table>
+                    </div>
+                </el-tab-pane>
+
+                <el-tab-pane label="分析报表">
+                    <div v-if="selectedIds.length === 0" class="empty-tip">请先选择卫星以生成报表</div>
+                    <div v-else style="padding-top: 5px;">
+                        <div v-for="id in selectedIds" :key="'dl-'+id" style="margin-bottom:8px">
+                            <el-button size="small" plain @click="downloadReport(id)" style="width:100%; text-align:left; justify-content: flex-start;">
+                                <span :style="{color: colors[selectedIds.indexOf(id) % colors.length]}">●</span>
+                                <span style="margin-left:8px">导出 {{ getSatName(id) }} 报表</span>
+                            </el-button>
+                        </div>
+                    </div>
                 </el-tab-pane>
             </el-tabs>
+
+            <div style="margin-top:12px; display:flex; gap:10px">
+                <el-button type="danger" size="small" plain @click="clearAll" style="flex:1">重置图层</el-button>
+                <el-button type="warning" size="small" plain @click="syncData" style="flex:1">同步TLE</el-button>
+            </div>
         </div>
         <div id="cesiumContainer"></div>
     </div>
@@ -70,97 +104,145 @@
         createApp({
             setup() {
                 const satelliteList = ref([]);
-                const selectedSatId = ref('');
-                const currentInfo = ref(null);
+                const selectedIds = ref([]);
+                const displayData = ref([]);
                 const transitList = ref([]);
-                const station = reactive({ lon: 121.47, lat: 31.23 }); // 默认上海
+                const transitTargetId = ref(null);
+                const station = reactive({ lon: 121.47, lat: 31.23 });
+                const colors = ['#FF4500', '#32CD32', '#1E90FF', '#FFD700', '#FF00FF', '#00FFFF'];
+                const cesiumColors = [Cesium.Color.ORANGERED, Cesium.Color.LIME, Cesium.Color.DODGERBLUE, Cesium.Color.GOLD, Cesium.Color.MAGENTA, Cesium.Color.CYAN];
 
-                let viewer, stationEntity, pathEntity, coverageEntity;
+                let viewer;
+                const entityGroups = new Map();
 
                 const initCesium = () => {
                     viewer = new Cesium.Viewer('cesiumContainer', {
                         baseLayerPicker: false, geocoder: false,
-                        baseLayer: new Cesium.ImageryLayer(new Cesium.OpenStreetMapImageryProvider({
-                            url : 'https://a.tile.openstreetmap.org/'
-                        }))
+                        baseLayer: new Cesium.ImageryLayer(new Cesium.OpenStreetMapImageryProvider({ url : 'https://a.tile.openstreetmap.org/' }))
                     });
                     viewer.scene.requestRenderMode = true;
+                    viewer.resolutionScale = 0.9;
 
-                    // 注册左键点击事件：选择地面站
                     const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
                     handler.setInputAction((click) => {
                         const cartesian = viewer.camera.pickEllipsoid(click.position);
                         if (cartesian) {
-                            const cartographic = Cesium.Cartographic.fromCartesian(cartesian);
-                            station.lon = Cesium.Math.toDegrees(cartographic.longitude);
-                            station.lat = Cesium.Math.toDegrees(cartographic.latitude);
+                            const carto = Cesium.Cartographic.fromCartesian(cartesian);
+                            station.lon = Cesium.Math.toDegrees(carto.longitude);
+                            station.lat = Cesium.Math.toDegrees(carto.latitude);
                             updateStationMarker();
                         }
                     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
                 };
 
+                const handleSelectionChange = async (ids) => {
+                    if (!ids || ids.length === 0) {
+                        clearAll();
+                        return;
+                    }
+                    try {
+                        // 1. 获取覆盖数据（包含实况监控所需的所有经纬度、高度、面积信息）
+                        const covRes = await fetch(`http://localhost:8000/api/satellite/batch_coverage?sat_ids=${ids.join(',')}`);
+                        const covData = await covRes.json();
+                        displayData.value = covData; // 核心：更新此变量即会消除提示并显示实况卡片
+
+                        // 2. 获取轨迹数据
+                        const trajRes = await fetch(`http://localhost:8000/api/satellite/batch_trajectory?sat_ids=${ids.join(',')}`);
+                        const trajMap = await trajRes.json();
+
+                        renderEntities(covData, trajMap);
+                    } catch (e) {
+                        console.error(e);
+                        ElementPlus.ElMessage.error("后端数据获取失败，请检查 main.py 是否启动");
+                    }
+                };
+
+                const renderEntities = (covData, trajMap) => {
+                    entityGroups.forEach(list => list.forEach(e => viewer.entities.remove(e)));
+                    entityGroups.clear();
+
+                    covData.forEach((sat, index) => {
+                        const color = cesiumColors[index % cesiumColors.length];
+                        const list = [];
+
+                        if (sat.cover_range) {
+                            list.push(viewer.entities.add({
+                                polygon: {
+                                    hierarchy: sat.cover_range.map(p => Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude)),
+                                    material: color.withAlpha(0.25), outline: true, outlineColor: color
+                                }
+                            }));
+                        }
+
+                        const traj = trajMap[sat.sat_id];
+                        if (traj) {
+                            list.push(viewer.entities.add({
+                                polyline: {
+                                    positions: traj.map(p => Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude, p.altitude * 1000)),
+                                    width: 2, material: color
+                                }
+                            }));
+                        }
+
+                        if (sat.subpoint) {
+                            list.push(viewer.entities.add({
+                                position: Cesium.Cartesian3.fromDegrees(sat.subpoint.longitude, sat.subpoint.latitude, 400000),
+                                point: { pixelSize: 8, color: color },
+                                label: { text: sat.sat_name, font: '10px sans-serif', pixelOffset: new Cesium.Cartesian2(0, -15), fillColor: color }
+                            }));
+                        }
+                        entityGroups.set(sat.sat_id, list);
+                    });
+                    viewer.scene.requestRender();
+                };
+
+                let stationEntity = null;
                 const updateStationMarker = () => {
                     if (stationEntity) viewer.entities.remove(stationEntity);
                     stationEntity = viewer.entities.add({
                         position: Cesium.Cartesian3.fromDegrees(station.lon, station.lat),
-                        point: { pixelSize: 12, color: Cesium.Color.SPRINGGREEN, outlineColor: Cesium.Color.WHITE, outlineWidth: 2 },
-                        label: { text: '观测站', font: '12px sans-serif', verticalOrigin: Cesium.VerticalOrigin.BOTTOM, pixelOffset: new Cesium.Cartesian2(0, -10) }
+                        point: { pixelSize: 10, color: Cesium.Color.SPRINGGREEN, outlineColor: Cesium.Color.WHITE, outlineWidth: 2 }
                     });
                     viewer.scene.requestRender();
                 };
 
                 const fetchTransit = async () => {
-                    if (!selectedSatId.value) return;
+                    if (!transitTargetId.value) return;
                     try {
-                        const url = `http://localhost:8000/api/satellite/transit?sat_id=${selectedSatId.value}&lon=${station.lon}&lat=${station.lat}`;
-                        const res = await fetch(url);
-                        transitList.value = await res.json();
-                        if (transitList.value.length === 0) {
-                            ElementPlus.ElMessage.warning('未来24小时内该卫星不会经过此站点上空');
-                        }
-                    } catch (e) {
-                        ElementPlus.ElMessage.error('获取过境数据失败');
-                    }
+                        const res = await fetch(`http://localhost:8000/api/satellite/transit?sat_id=${transitTargetId.value}&lon=${station.lon}&lat=${station.lat}`);
+                        const data = await res.json();
+                        transitList.value = data;
+                        if(data.length === 0) ElementPlus.ElMessage.info("此地点未来24H无过境");
+                    } catch(e) { ElementPlus.ElMessage.error("预报计算失败"); }
                 };
 
-                const handleSatChange = async (id) => {
-                    const trajRes = await fetch(`http://localhost:8000/api/satellite/trajectory/${id}`);
-                    const trajData = await trajRes.json();
+                const downloadReport = (id) => {
+                    window.location.href = `http://localhost:8000/api/satellite/export_report/${id}`;
+                };
 
-                    if (pathEntity) viewer.entities.remove(pathEntity);
-                    pathEntity = viewer.entities.add({
-                        polyline: {
-                            positions: trajData.map(p => Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude, p.altitude * 1000)),
-                            width: 2, material: Cesium.Color.GOLD
-                        }
-                    });
-
-                    const covRes = await fetch(`http://localhost:8000/api/satellite/coverage/${id}`);
-                    currentInfo.value = await covRes.json();
-
-                    if (coverageEntity) viewer.entities.remove(coverageEntity);
-                    coverageEntity = viewer.entities.add({
-                        polygon: {
-                            hierarchy: currentInfo.value.cover_range.map(p => Cesium.Cartesian3.fromDegrees(p.longitude, p.latitude)),
-                            material: Cesium.Color.CYAN.withAlpha(0.3)
-                        }
-                    });
-
+                const clearAll = () => {
+                    selectedIds.value = [];
+                    displayData.value = [];
+                    transitList.value = [];
+                    transitTargetId.value = null;
+                    entityGroups.forEach(list => list.forEach(e => viewer.entities.remove(e)));
+                    entityGroups.clear();
                     viewer.scene.requestRender();
                 };
 
-                const fetchList = async () => {
-                    const res = await fetch('http://localhost:8000/api/satellites/list');
-                    satelliteList.value = await res.json();
-                };
+                const syncData = () => fetch('http://localhost:8000/api/data/update', {method:'POST'});
+                const getSatName = (id) => satelliteList.value.find(s=>s.id===id)?.name || id;
 
-                onMounted(() => {
+                onMounted(async () => {
                     initCesium();
-                    fetchList();
+                    try {
+                        const res = await fetch('http://localhost:8000/api/satellites/list');
+                        satelliteList.value = await res.json();
+                    } catch(e) { ElementPlus.ElMessage.error("无法连接后端服务"); }
                     updateStationMarker();
                 });
 
-                return { satelliteList, selectedSatId, handleSatChange, currentInfo, station, transitList, fetchTransit };
+                return { satelliteList, selectedIds, displayData, station, transitList, transitTargetId, colors, handleSelectionChange, fetchTransit, clearAll, downloadReport, getSatName, syncData };
             }
         }).use(ElementPlus).mount('#app');
     </script>

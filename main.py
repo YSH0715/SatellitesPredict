@@ -4,6 +4,9 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
+import pandas as pd
+from fastapi.responses import StreamingResponse
+import io
 
 # 导入你之前的算法类
 from ComputeSubpoint import ComputeSubpoint
@@ -148,6 +151,118 @@ async def get_satellites_list():
     results = [{"id": row[0], "name": row[1]} for row in cursor.fetchall()]
     conn.close()
     return results
+
+
+@app.get("/api/satellite/batch_coverage")
+async def get_batch_coverage(sat_ids: str):
+    """
+    批量获取卫星覆盖范围
+    :param sat_ids: 逗号分隔的卫星ID，例如 "25544,43013"
+    """
+    id_list = [int(sid) for sid in sat_ids.split(",") if sid.strip()]
+    results = []
+
+    now = datetime.now(timezone.utc)
+
+    for sat_id in id_list:
+        tle = get_tle_from_db(sat_id)
+        if not tle:
+            continue
+
+        # 计算覆盖范围
+        computer = ComputeCoverageArea(tle[0], tle[1], now, now + timedelta(seconds=1), 1)
+        data = computer.run()
+        if data:
+            res = data[0]
+            res['sat_id'] = sat_id
+            # 加上卫星名称方便前端识别
+            conn = sqlite3.connect('satellite_system.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT sat_name FROM satellites WHERE sat_id=?", (sat_id,))
+            name_row = cursor.fetchone()
+            res['sat_name'] = name_row[0] if name_row else f"SAT {sat_id}"
+            conn.close()
+            results.append(res)
+
+    return results
+
+
+@app.get("/api/satellite/batch_trajectory")
+async def get_batch_trajectory(sat_ids: str, minutes: int = 90, step: int = 60):
+    """
+    批量获取多颗卫星的轨迹数据
+    :param sat_ids: 逗号分隔的ID，如 "25544,43013"
+    """
+    id_list = [int(sid) for sid in sat_ids.split(",") if sid.strip()]
+    results = {}
+
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(minutes=minutes)
+
+    for sat_id in id_list:
+        tle = get_tle_from_db(sat_id)
+        if tle:
+            computer = ComputeSubpoint(tle[0], tle[1], start, end, step)
+            results[sat_id] = computer.run()
+
+    return results
+
+
+@app.get("/api/satellite/export_report/{sat_id}")
+async def export_report(sat_id: int):
+    """
+    生成卫星未来12小时的运行数据分析报表（Excel）
+    """
+    tle = get_tle_from_db(sat_id)
+    if not tle:
+        raise HTTPException(status_code=404, detail="Satellite not found")
+
+    # 1. 获取卫星名称
+    conn = sqlite3.connect('satellite_system.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT sat_name FROM satellites WHERE sat_id=?", (sat_id,))
+    name_row = cursor.fetchone()
+    sat_name = name_row[0] if name_row else str(sat_id)
+    conn.close()
+
+    # 2. 计算未来12小时的数据，每10分钟采样一次
+    start = datetime.now(timezone.utc)
+    end = start + timedelta(hours=12)
+    # 使用你已有的 ComputeSubpoint 计算轨迹
+    computer_traj = ComputeSubpoint(tle[0], tle[1], start, end, 600)
+    traj_data = computer_traj.run()
+
+    # 3. 整理数据为表格格式
+    report_list = []
+    for p in traj_data:
+        # 针对每个点计算覆盖面积
+        t_point = datetime.fromisoformat(p['time'].replace('Z', '+00:00'))
+        computer_cov = ComputeCoverageArea(tle[0], tle[1], t_point, t_point + timedelta(seconds=1), 1)
+        cov_res = computer_cov.run()[0]
+
+        report_list.append({
+            "时间(UTC)": p['time'],
+            "经度(deg)": round(p['longitude'], 4),
+            "纬度(deg)": round(p['latitude'], 4),
+            "高度(km)": round(p['altitude'], 2),
+            "覆盖半径(deg)": round(cov_res['cover_radius_deg'], 2),
+            "覆盖面积(sqkm)": round(cov_res['cover_area_sqkm'], 2)
+        })
+
+    # 4. 使用 Pandas 转换为 Excel 字节流
+    df = pd.DataFrame(report_list)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Satellite Report')
+    output.seek(0)
+
+    # 5. 返回文件下载响应
+    filename = f"Report_{sat_name}_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 
 if __name__ == "__main__":
