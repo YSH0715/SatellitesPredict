@@ -113,24 +113,37 @@ async def get_coverage(sat_id: int):
 
 @app.get("/api/satellite/transit")
 async def get_transit(sat_id: int, lon: float, lat: float, alt: float = 0):
-    """预测未来24小时内的过境信息"""
+    """
+    预测未来24小时内的过境信息
+    """
+    # 1. 从数据库获取该卫星的 TLE
     tle = get_tle_from_db(sat_id)
     if not tle:
         raise HTTPException(status_code=404, detail="Satellite data not found")
 
+    # 2. 设置时间范围：从现在开始，往后推 24 小时
     start = datetime.now(timezone.utc)
     end = start + timedelta(hours=24)
 
-    # 使用你编写的过境计算类
-    computer = ComputeTransitSinglePoint(tle[0], tle[1], lon, lat, alt, start, end)
-    return computer.run()
+    try:
+        # 这里传入前端传来的站点经纬度 (lon, lat)
+        computer = ComputeTransitSinglePoint(tle[0], tle[1], lon, lat, alt, start, end)
+
+        # 执行计算：内部会计算仰角、方位角等，并筛选出仰角 > 5度的时段
+        results = computer.run()
+
+        # 返回给前端 JSON 列表 (包含 start_time, max_pitch_angle, target_timeliness 等)
+        return results
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/satellites/list")
 async def get_satellites_list():
-    """获取数据库中所有卫星的编号和名称"""
+    """获取数据库中所有卫星，供前端下拉框展示"""
     conn = sqlite3.connect('satellite_system.db')
     cursor = conn.cursor()
+    # 前端显示“卫星名 [#编号]”
     cursor.execute("SELECT sat_id, sat_name FROM satellites ORDER BY sat_name ASC")
     results = [{"id": row[0], "name": row[1]} for row in cursor.fetchall()]
     conn.close()
