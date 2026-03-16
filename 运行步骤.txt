@@ -1,5 +1,0 @@
-第一步：在 PyCharm 中点击运行 main.py。确保控制台没有红色报错，并看到 Uvicorn running on http://127.0.0.1:8000。(0.0.0.0)
-
-第二步：打开终端，进入前端目录，输入 python -m http.server 5500。
-
-第三步：打开浏览器，访问 http://localhost:5500。
