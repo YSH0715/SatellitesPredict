@@ -8,7 +8,6 @@ import pandas as pd
 from fastapi.responses import StreamingResponse
 import io
 
-# 导入你之前的算法类
 from ComputeSubpoint import ComputeSubpoint
 from ComputeTransitSinglePoint import ComputeTransitSinglePoint
 from ComputeCoverageArea import ComputeCoverageArea
@@ -228,7 +227,7 @@ async def export_report(sat_id: int):
     # 2. 计算未来12小时的数据，每10分钟采样一次
     start = datetime.now(timezone.utc)
     end = start + timedelta(hours=12)
-    # 使用你已有的 ComputeSubpoint 计算轨迹
+    # 使用 ComputeSubpoint 计算轨迹
     computer_traj = ComputeSubpoint(tle[0], tle[1], start, end, 600)
     traj_data = computer_traj.run()
 
